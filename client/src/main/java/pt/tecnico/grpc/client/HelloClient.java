@@ -7,7 +7,12 @@ import pt.tecnico.grpc.HelloWorldServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class HelloClient {
+
+	private static final int NUM_SERVERS = 2;
 
 	public static void main(String[] args) throws Exception {
 		System.out.println(HelloClient.class.getSimpleName());
@@ -27,25 +32,36 @@ public class HelloClient {
 
 		final String host = args[0];
 		final int port = Integer.parseInt(args[1]);
-		final String target = host + ":" + port;
 
-		// Channel is the abstraction to connect to a service endpoint
-		// Let us use plaintext communication because we do not have certificates
-		final ManagedChannel channel = ManagedChannelBuilder.forTarget(target).usePlaintext().build();
+		List<ManagedChannel> channels = new ArrayList<>();
+		List<HelloWorldServiceGrpc.HelloWorldServiceStub> stubs = new ArrayList<>();
+		for (int i = 0; i < NUM_SERVERS; i++) {
+			final String target = host + ":" + (port + i);
+			ManagedChannel channel = ManagedChannelBuilder.forTarget(target).usePlaintext().build();
+			channels.add(channel);
+			stubs.add(HelloWorldServiceGrpc.newStub(channel));
+		}
 
-		// It is up to the client to determine whether to block the call
-		// Here we create an async stub
-		HelloWorldServiceGrpc.HelloWorldServiceStub stub = HelloWorldServiceGrpc.newStub(channel);
-		HelloWorld.HelloRequest request = HelloWorld.HelloRequest.newBuilder().setName("friend").build();
+		ResponseCollector collector = new ResponseCollector();
+		for (int i = 0; i < NUM_SERVERS; i++) {
+			String name = "friend" + i;
+			if (i == 0)
+				name = "Alice";
+			else
+				name = "Bob";
+			HelloWorld.HelloRequest request = HelloWorld.HelloRequest.newBuilder().setName(name).build();
+			stubs.get(i).greeting(request, new HelloObserver(collector));
+		}
 
-		// Finally, make the call using the stub
-		stub.greeting(request, new HelloObserver<HelloWorld.HelloResponse>());
+		collector.waitAllResponses(NUM_SERVERS);
+		//collector.waitAllResponses(1);
+		List<String> responses = collector.getResponses();
+        for (String response : responses) System.out.println(response);
 
-		System.out.println("Shutting down");
-
-		// A Channel should be shutdown before stopping the process
-		// We can't use shutdownNow as it will cancel the asynchronous call
-		channel.shutdown();
+		for (int i = 0; i < NUM_SERVERS; i++) {
+			System.out.println("Shutting down: " + channels.get(i));
+			channels.get(i).shutdown();
+		}
 	}
 
 }
